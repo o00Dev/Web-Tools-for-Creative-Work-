@@ -1,0 +1,251 @@
+// ─────────────────────────────────────────────────────────────
+// Telomere Cell Clock — P5.js sketch.js
+// 40 organic cells clipped to a circle
+// Each cell color cycles based on its time unit (hour/min/sec)
+// Peak warmth/brightness at value 30 in each unit
+//   seconds: peak at second 30
+//   minutes: peak at minute 30
+//   hours:   peak at hour 6 (halfway through 12h)
+//
+// Outer rim: cool indigo at rest → warm amber-orange at peak
+// Inner glow: cool cyan at rest → bright yellow-green at peak
+//
+// ⚡ Accelerator code is grouped at the bottom of this file
+// ─────────────────────────────────────────────────────────────
+
+const W = 600, H = 600;
+const CX = W / 2, CY = H / 2;
+const CLOCK_R = 260;
+const BASE_R = { hour:55, minute:42, second:32 };
+
+let cells = [];
+
+// 40 cells — mix of types
+const CELL_DEFS = [];
+for (let i = 0; i < 40; i++) {
+  if (i % 6 === 0)      CELL_DEFS.push({ type:'hour'   });
+  else if (i % 3 === 0) CELL_DEFS.push({ type:'minute' });
+  else                  CELL_DEFS.push({ type:'second' });
+}
+
+// 12 layer definitions — outer corona to bright inner core
+const LAYERS = [
+  { rf:2.20, af:0.06 }, { rf:1.90, af:0.09 }, { rf:1.65, af:0.13 },
+  { rf:1.45, af:0.18 }, { rf:1.28, af:0.48 }, { rf:1.12, af:0.60 },
+  { rf:0.96, af:0.68 }, { rf:0.80, af:0.72 }, { rf:0.64, af:0.76 },
+  { rf:0.48, af:0.80 }, { rf:0.33, af:0.82 }, { rf:0.18, af:0.78 },
+];
+
+function setup() {
+  createCanvas(W, H);
+  colorMode(HSB, 360, 100, 100, 100);
+  initAccelerator(); // ⚡
+
+  const placed = [];
+  for (let def of CELL_DEFS) {
+    const r = BASE_R[def.type];
+    for (let attempt = 0; attempt < 500; attempt++) {
+
+      // Radial distribution: hour=center, second=outer ring
+      let zoneR;
+      if      (def.type === 'hour')   zoneR = pow(random(), 2.2) * CLOCK_R * 0.50;
+      else if (def.type === 'minute') zoneR = pow(random(), 1.8) * CLOCK_R * 0.75;
+      else                            zoneR = pow(random(), 1.4) * CLOCK_R;
+
+      const angle = random(TWO_PI);
+      const cx = CX + cos(angle)*zoneR;
+      const cy = CY + sin(angle)*zoneR;
+
+      let overlaps = false;
+      for (const pc of placed) {
+        if (dist(cx, cy, pc.hx, pc.hy) < (r + pc.r) * 1.1) { overlaps = true; break; }
+      }
+
+      if (!overlaps) {
+        const cell = {
+          type: def.type,
+          hx: cx, hy: cy, r,
+          seed:  random(1000),
+          seed2: random(2000),
+          driftSpd: random(0.0005, 0.0015),
+          driftRng: random(1, 3),
+          rot:    random(TWO_PI),
+          rotSpd: random(-0.002, 0.002),
+        };
+        cells.push(cell);
+        placed.push(cell);
+        break;
+      }
+    }
+  }
+}
+
+// ── Peak-30 color function ────────────────────────────────────
+// t = 0→1 across the full time unit range
+// Peak is at t=0.5 (= value 30 out of 60, or hour 6 out of 12)
+//
+// Returns [outerColor[h,s,b], innerColor[h,s,b], peakAmount 0→1]
+function peakColor(t) {
+  // Gaussian bell peaking at t=0.5
+  const peak = exp(-pow((t - 0.5) * 3.8, 2));
+
+  // Outer: indigo (240) at rest → amber-orange (28) at peak
+  const outerH = lerp(240, 28,  peak);
+  const outerS = lerp(65,  88,  peak);
+  const outerB = lerp(40,  85,  peak);
+
+  // Inner: cyan (195) at rest → bright yellow-green (68) at peak
+  const innerH = lerp(195, 68,  peak);
+  const innerS = lerp(58,  72,  peak);
+  const innerB = lerp(65,  100, peak);
+
+  return [
+    [outerH % 360, outerS, outerB],
+    [innerH % 360, innerS, innerB],
+    peak
+  ];
+}
+
+// ── Organic blob shape — Perlin noise deformation ─────────────
+function blob(r, seed, t) {
+  beginShape();
+  for (let a = 0; a < TWO_PI; a += 0.15) {
+    const n1 = noise(seed + cos(a)*1.5 + t*0.6, sin(a)*1.5);
+    const n2 = noise(seed*0.4 + cos(a)*3.2 + t*0.4, sin(a)*3.2);
+    const rr = r * (1 + (n1-0.5)*0.28 + (n2-0.5)*0.09);
+    vertex(cos(a)*rr, sin(a)*rr);
+  }
+  endShape(CLOSE);
+}
+
+// ── Draw one cell — 12 concentric blob layers ─────────────────
+function drawCell(r, outerC, innerC, seed, peak) {
+  const [oh, os, ob] = outerC;
+  const [ih, is_, ib] = innerC;
+  const t = accelFrame() * 0.01; // ⚡
+
+  for (let li = 0; li < LAYERS.length; li++) {
+    const lay = LAYERS[li];
+    const p_  = li / (LAYERS.length - 1); // 0=outer, 1=inner
+
+    const hue = lerp(oh, ih, p_);
+    const sat = lerp(os, is_, p_);
+    const bri = lerp(ob * 0.88, ib * (1 + peak * 0.18), p_);
+    const alp = lay.af * 100 * (0.65 + peak * 0.35);
+
+    fill((hue + 360) % 360, min(100, sat), min(100, bri), min(100, alp));
+    noStroke();
+    blob(r * lay.rf, seed + li*17, t);
+  }
+
+  // Outer cell wall stroke — warms at peak
+  noFill();
+  stroke(oh, os*0.55, ob*0.45, 45 + peak*35);
+  strokeWeight(0.8);
+  blob(r, seed, t);
+  noStroke();
+}
+
+// ── Main draw loop ────────────────────────────────────────────
+function draw() {
+  updateAccelerator(); // ⚡
+
+  background(0, 0, 98);
+
+  push();
+  translate(CX, CY);
+
+  // Clip everything to circular canvas
+  drawingContext.save();
+  drawingContext.beginPath();
+  drawingContext.arc(0, 0, CLOCK_R, 0, TWO_PI);
+  drawingContext.clip();
+  translate(-CX, -CY);
+
+  const now = accelNow(); // ⚡
+  const hr  = now.getHours();
+  const mn  = now.getMinutes();
+  const sc  = now.getSeconds();
+  const ms  = now.getMilliseconds();
+
+  // Smooth 0→1 progress for each time unit
+  const tHour   = ((hr % 12) + mn/60) / 12; // peak at hour 6
+  const tMinute = (mn + sc/60)        / 60; // peak at min 30
+  const tSecond = (sc + ms/1000)      / 60; // peak at sec 30
+
+  for (const c of cells) {
+    // Gentle drift, clamped inside circle
+    let px = c.hx + (noise(c.seed  + accelFrame()*c.driftSpd) - 0.5) * c.driftRng; // ⚡
+    let py = c.hy + (noise(c.seed2 + accelFrame()*c.driftSpd) - 0.5) * c.driftRng; // ⚡
+    let dx = px - CX, dy = py - CY;
+    const d = sqrt(dx*dx + dy*dy);
+    const maxR = CLOCK_R - c.r * 2.2;
+    if (d > maxR) { dx *= maxR/d; dy *= maxR/d; }
+
+    // Pick time fraction based on cell type
+    const t = c.type==='hour' ? tHour : c.type==='minute' ? tMinute : tSecond;
+    const [outerC, innerC, peak] = peakColor(t);
+
+    push();
+    translate(CX+dx, CY+dy);
+    rotate(c.rot += c.rotSpd * accelSpeed()); // ⚡
+    drawCell(c.r * 1.15, outerC, innerC, c.seed, peak);
+    pop();
+  }
+
+  drawingContext.restore();
+  pop();
+
+  // Soft circular edge vignette
+  noStroke();
+  for (let i = 0; i < 22; i++) {
+    fill(0, 0, 98, 4);
+    ellipse(CX, CY, CLOCK_R*2 + i*4);
+  }
+
+  // Boundary ring
+  noFill();
+  stroke(0, 0, 40, 25);
+  strokeWeight(1.5);
+  ellipse(CX, CY, CLOCK_R*2);
+}
+
+
+
+
+//   Speeds up both the cell clock and the cell animation
+
+const ACCEL_MIN = 1, 
+  ACCEL_MAX = 3, 
+  ACCEL_START = 1, 
+  ACCEL_STEP = 0.1;
+
+let speedSlider, speedLabel;
+let simMs;          
+let animFrame = 0;  
+let curSpeed = 1;
+
+function initAccelerator() {
+  simMs = Date.now();
+
+  speedSlider = createSlider(ACCEL_MIN, ACCEL_MAX, ACCEL_START, ACCEL_STEP);
+  speedSlider.position(20, H + 15);
+  speedSlider.style('width', '220px');
+
+  speedLabel = createSpan('');
+  speedLabel.position(255, H + 13);
+  speedLabel.style('font-family', 'sans-serif');
+  speedLabel.style('font-size', '14px');
+  speedLabel.style('color', '#000000');
+}
+
+function updateAccelerator() {
+  curSpeed   = speedSlider.value();
+  simMs     += deltaTime * curSpeed;
+  animFrame += curSpeed;
+  speedLabel.html(': ' + curSpeed.toFixed(1) + '×');
+}
+
+function accelSpeed() { return curSpeed; }
+function accelFrame() { return animFrame; }
+function accelNow()   { return new Date(simMs); }
